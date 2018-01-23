@@ -2,6 +2,9 @@
 .cache/
 .coverage
 doc/_build/
+.ipynb_checkpoints
+# Not sure I should include this one
+package-lock.json
 
 # build artifacts
 allennlp.egg-info/
