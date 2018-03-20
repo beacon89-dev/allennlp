@@ -11,7 +11,8 @@ import tempfile
 from urllib.parse import urlparse
 
 import requests
-import tqdm
+
+from allennlp.common.tqdm import Tqdm
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
@@ -23,12 +24,18 @@ def url_to_filename(url: str, etag: str = None) -> str:
     Converts a url into a filename in a reversible way.
     If `etag` is specified, add it on the end, separated by a period
     (which necessarily won't appear in the base64-encoded filename).
+    Get rid of the quotes in the etag, since Windows doesn't like them.
     """
     url_bytes = url.encode('utf-8')
     b64_bytes = base64.b64encode(url_bytes)
     decoded = b64_bytes.decode('utf-8')
 
-    return decoded if etag is None else "{}.{}".format(decoded, etag)
+    if etag:
+        # Remove quotes from etag
+        etag = etag.replace('"', '')
+        return f"{decoded}.{etag}"
+    else:
+        return decoded
 
 def filename_to_url(filename: str) -> Tuple[str, str]:
     """
@@ -105,7 +112,7 @@ def get_from_cache(url: str, cache_dir: str = None) -> str:
         req = requests.get(url, stream=True)
         content_length = req.headers.get('Content-Length')
         total = int(content_length) if content_length is not None else None
-        progress = tqdm.tqdm(unit="B", total=total)
+        progress = Tqdm.tqdm(unit="B", total=total)
         with open(temp_filename, 'wb') as temp_file:
             for chunk in req.iter_content(chunk_size=1024):
                 if chunk: # filter out keep-alive new chunks

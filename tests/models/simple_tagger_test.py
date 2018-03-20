@@ -3,16 +3,15 @@ from flaky import flaky
 import pytest
 import numpy
 
+import torch
+
 from allennlp.common.testing import ModelTestCase
 from allennlp.common.checks import ConfigurationError
 from allennlp.common.params import Params
 from allennlp.data.dataset_readers import DatasetReader
 from allennlp.data.iterators import DataIterator, BasicIterator
 from allennlp.models import Model
-from allennlp.nn.util import arrays_to_variables
 from allennlp.training import Trainer
-
-import torch
 
 class SimpleTaggerTest(ModelTestCase):
     def setUp(self):
@@ -28,17 +27,17 @@ class SimpleTaggerTest(ModelTestCase):
         self.ensure_batch_predictions_are_consistent()
 
     def test_forward_pass_runs_correctly(self):
-        training_arrays = self.dataset.as_array_dict()
-        output_dict = self.model.forward(**arrays_to_variables(training_arrays))
+        training_tensors = self.dataset.as_tensor_dict()
+        output_dict = self.model(**training_tensors)
         output_dict = self.model.decode(output_dict)
         class_probs = output_dict['class_probabilities'][0].data.numpy()
         numpy.testing.assert_almost_equal(numpy.sum(class_probs, -1), numpy.array([1, 1, 1, 1]))
 
     def test_mismatching_dimensions_throws_configuration_error(self):
         params = Params.from_file(self.param_file)
-        # Make the stacked_encoder wrong - it should be 2 to match
+        # Make the encoder wrong - it should be 2 to match
         # the embedding dimension from the text_field_embedder.
-        params["model"]["stacked_encoder"]["input_size"] = 10
+        params["model"]["encoder"]["input_size"] = 10
         with pytest.raises(ConfigurationError):
             Model.from_params(self.vocab, params.pop("model"))
 
@@ -50,12 +49,12 @@ class SimpleTaggerTest(ModelTestCase):
         trainer = Trainer(self.model,
                           None,  # optimizer,
                           iterator,
-                          self.dataset)
+                          self.instances)
 
         # You get a RuntimeError if you call `model.forward` twice on the same inputs.
         # The data and config are such that the whole dataset is one batch.
-        training_batch = next(iterator(self.dataset, num_epochs=1))
-        validation_batch = next(iterator(self.dataset, num_epochs=1))
+        training_batch = next(iterator(self.instances, num_epochs=1))
+        validation_batch = next(iterator(self.instances, num_epochs=1))
 
         training_loss = trainer._batch_loss(training_batch, for_training=True).data
         validation_loss = trainer._batch_loss(validation_batch, for_training=False).data
@@ -106,8 +105,8 @@ class SimpleTaggerRegularizationTest(ModelTestCase):
 
         # You get a RuntimeError if you call `model.forward` twice on the same inputs.
         # The data and config are such that the whole dataset is one batch.
-        training_batch = next(self.iterator(self.dataset, num_epochs=1))
-        validation_batch = next(self.iterator(self.dataset, num_epochs=1))
+        training_batch = next(self.iterator(self.instances, num_epochs=1))
+        validation_batch = next(self.iterator(self.instances, num_epochs=1))
 
         training_loss = self.trainer._batch_loss(training_batch, for_training=True).data
         validation_loss = self.trainer._batch_loss(validation_batch, for_training=False).data

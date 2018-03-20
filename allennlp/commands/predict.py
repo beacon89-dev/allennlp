@@ -4,9 +4,16 @@ predictions using a trained model and its :class:`~allennlp.service.predictors.p
 
 .. code-block:: bash
 
-    $ python -m allennlp.run predict --help
-    usage: run [command] predict [-h] [--output-file OUTPUT_FILE] [--print]
-                                archive_file input_file
+    $ allennlp predict --help
+    usage: allennlp [command] predict [-h]
+                                      [--output-file OUTPUT_FILE]
+                                      [--batch-size BATCH_SIZE]
+                                      [--silent]
+                                      [--cuda-device CUDA_DEVICE]
+                                      [-o OVERRIDES]
+                                      [--include-package INCLUDE_PACKAGE]
+                                      [--predictor PREDICTOR]
+                                      archive_file input_file
 
     Run the specified model against a JSON-lines input file.
 
@@ -18,14 +25,24 @@ predictions using a trained model and its :class:`~allennlp.service.predictors.p
     -h, --help            show this help message and exit
     --output-file OUTPUT_FILE
                             path to output file
-    --print               print results to stdout
+    --batch-size BATCH_SIZE
+                            The batch size to use for processing
+    --silent              do not print output to stdout
+    --cuda-device CUDA_DEVICE
+                            id of GPU to use (if any)
+    -o OVERRIDES, --overrides OVERRIDES
+                            a HOCON structure used to override the experiment
+                            configuration
+    --include-package INCLUDE_PACKAGE
+                            additional packages to include
+    --predictor PREDICTOR
+                            optionally specify a specific predictor to use
 """
 
 import argparse
 from contextlib import ExitStack
-import json
 import sys
-from typing import Optional, IO, Dict
+from typing import Optional, IO
 
 from allennlp.commands.subcommand import Subcommand
 from allennlp.common.checks import ConfigurationError
@@ -39,15 +56,12 @@ DEFAULT_PREDICTORS = {
         'bidaf': 'machine-comprehension',
         'simple_tagger': 'sentence-tagger',
         'crf_tagger': 'sentence-tagger',
-        'coref': 'coreference-resolution'
+        'coref': 'coreference-resolution',
+        'constituency_parser': 'constituency-parser',
 }
 
 
 class Predict(Subcommand):
-    def __init__(self, predictor_overrides: Dict[str, str] = {}) -> None:
-        # pylint: disable=dangerous-default-value
-        self.predictors = {**DEFAULT_PREDICTORS, **predictor_overrides}
-
     def add_subparser(self, name: str, parser: argparse._SubParsersAction) -> argparse.ArgumentParser:
         # pylint: disable=protected-access
         description = '''Run the specified model against a JSON-lines input file.'''
@@ -58,33 +72,47 @@ class Predict(Subcommand):
         subparser.add_argument('input_file', type=argparse.FileType('r'), help='path to input file')
 
         subparser.add_argument('--output-file', type=argparse.FileType('w'), help='path to output file')
+        subparser.add_argument('--weights-file',
+                               type=str,
+                               help='a path that overrides which weights file to use')
 
         batch_size = subparser.add_mutually_exclusive_group(required=False)
         batch_size.add_argument('--batch-size', type=int, default=1, help='The batch size to use for processing')
-        batch_size.add_argument('--batch_size', type=int, help=argparse.SUPPRESS)
 
         subparser.add_argument('--silent', action='store_true', help='do not print output to stdout')
 
         cuda_device = subparser.add_mutually_exclusive_group(required=False)
         cuda_device.add_argument('--cuda-device', type=int, default=-1, help='id of GPU to use (if any)')
-        cuda_device.add_argument('--cuda_device', type=int, help=argparse.SUPPRESS)
 
         subparser.add_argument('-o', '--overrides',
                                type=str,
                                default="",
                                help='a HOCON structure used to override the experiment configuration')
 
-        subparser.set_defaults(func=_predict(self.predictors))
+        subparser.add_argument('--predictor',
+                               type=str,
+                               help='optionally specify a specific predictor to use')
+
+        subparser.set_defaults(func=_predict)
 
         return subparser
 
-def _get_predictor(args: argparse.Namespace, predictors: Dict[str, str]) -> Predictor:
-    archive = load_archive(args.archive_file, cuda_device=args.cuda_device, overrides=args.overrides)
+def _get_predictor(args: argparse.Namespace) -> Predictor:
+    archive = load_archive(args.archive_file,
+                           weights_file=args.weights_file,
+                           cuda_device=args.cuda_device,
+                           overrides=args.overrides)
+
+    if args.predictor:
+        # Predictor explicitly specified, so use it
+        return Predictor.from_archive(archive, args.predictor)
+
+    # Otherwise, use the mapping
     model_type = archive.config.get("model").get("type")
-    if model_type not in predictors:
-        raise ConfigurationError("no known predictor for model type {}".format(model_type))
-    predictor = Predictor.from_archive(archive, predictors[model_type])
-    return predictor
+    if model_type not in DEFAULT_PREDICTORS:
+        raise ConfigurationError(f"No known predictor for model type {model_type}.\n"
+                                 f"Specify one with the --predictor flag.")
+    return Predictor.from_archive(archive, DEFAULT_PREDICTORS[model_type])
 
 def _run(predictor: Predictor,
          input_file: IO,
@@ -103,18 +131,18 @@ def _run(predictor: Predictor,
             results = predictor.predict_batch_json(batch_data, cuda_device)
 
         for model_input, output in zip(batch_data, results):
-            string_output = json.dumps(output)
+            string_output = predictor.dump_line(output)
             if print_to_console:
                 print("input: ", model_input)
                 print("prediction: ", string_output)
             if output_file:
-                output_file.write(string_output + "\n")
+                output_file.write(string_output)
 
     batch_json_data = []
     for line in input_file:
         if not line.isspace():
             # Collect batch size amount of data.
-            json_data = json.loads(line)
+            json_data = predictor.load_line(line)
             batch_json_data.append(json_data)
             if len(batch_json_data) == batch_size:
                 _run_predictor(batch_json_data)
@@ -126,22 +154,24 @@ def _run(predictor: Predictor,
         _run_predictor(batch_json_data)
 
 
-def _predict(predictors: Dict[str, str]):
-    def predict_inner(args: argparse.Namespace) -> None:
-        predictor = _get_predictor(args, predictors)
-        output_file = None
+def _predict(args: argparse.Namespace) -> None:
+    predictor = _get_predictor(args)
+    output_file = None
 
-        if args.silent and not args.output_file:
-            print("--silent specified without --output-file.")
-            print("Exiting early because no output will be created.")
-            sys.exit(0)
+    if args.silent and not args.output_file:
+        print("--silent specified without --output-file.")
+        print("Exiting early because no output will be created.")
+        sys.exit(0)
 
-        # ExitStack allows us to conditionally context-manage `output_file`, which may or may not exist
-        with ExitStack() as stack:
-            input_file = stack.enter_context(args.input_file)  # type: ignore
-            if args.output_file:
-                output_file = stack.enter_context(args.output_file)  # type: ignore
+    # ExitStack allows us to conditionally context-manage `output_file`, which may or may not exist
+    with ExitStack() as stack:
+        input_file = stack.enter_context(args.input_file)  # type: ignore
+        if args.output_file:
+            output_file = stack.enter_context(args.output_file)  # type: ignore
 
-            _run(predictor, input_file, output_file, args.batch_size, not args.silent, args.cuda_device)
-
-    return predict_inner
+        _run(predictor,
+             input_file,
+             output_file,
+             args.batch_size,
+             not args.silent,
+             args.cuda_device)

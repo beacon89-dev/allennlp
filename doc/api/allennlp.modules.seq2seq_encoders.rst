@@ -20,3 +20,18 @@ allennlp.modules.seq2seq_encoders
    :members:
    :undoc-members:
    :show-inheritance:
+
+.. automodule:: allennlp.modules.seq2seq_encoders.stacked_self_attention
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: allennlp.modules.seq2seq_encoders.multi_head_self_attention
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: allennlp.modules.seq2seq_encoders.pass_through_encoder
+   :members:
+   :undoc-members:
+   :show-inheritance:

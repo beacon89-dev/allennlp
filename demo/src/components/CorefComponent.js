@@ -12,7 +12,7 @@ import ModelIntro from './ModelIntro'
 
 const corefExamples = [
     {
-      document: "We 're not going to skimp on quality , but we are very focused to make next year . The only problem is that some of the fabrics are wearing out - since I was a newbie I skimped on some of the fabric and the poor quality ones are developing holes . For some , an awareness of this exit strategy permeates the enterprise , allowing them to skimp on the niceties they would more or less have to extend toward a person they were likely to meet again .",
+      document: "We 're not going to skimp on quality , but we are very focused to make next year . The only problem is that some of the fabrics are wearing out - since I was a newbie I skimped on some of the fabric and the poor quality ones are developing holes ."
     },
     {
       document: "Xuming Zhang , Chairman of the Chinese Enterprise Association in Macau said that , at present there were more than 200 enterprises operating with Chinese capital in Macau and that the total value of assets is more than 90 billion patacas . Chinese capital enterprises have become the biggest foreign investors in Macau . Xuming Zhang recently said at the joint meeting for the fifth anniversary of the establishment of the Chinese Enterprise Association in Macau , that Macau 's inland investment enterprises , from small to large and from weak to strong , have developed into an important force in Macau 's economic domain .  They have made important contributions to the prosperity and stability of Macau . According to presentations , these enterprises have extensively taken part in many areas of operating activities such as trade , industry , finance , insurance , tourism , catering , traffic and transportation , construction , real estate , etc. in Macau . Among these , the proportion that Chinese capital accounts for in financial insurance has reached 50 % . It accounts for from 50 % to 70 % of the tourism industry , accounts for 30 % of imports and exports , and accounts for 70 % of real estate . Xuming Zhang expressed that enterprises operating with Chinese capital in Macau will continue to take the direction of Xiaoping Deng 's program of  one country , two systems  and of all national guidelines and policies for Hong Kong and Macau , to adhere to the principle of  Some to do and some not to do , and to strive together with local figures in industrial and commercial circles to make more contributions to promoting Macau 's economic stability and social development .",
@@ -24,7 +24,7 @@ const corefExamples = [
 
 const title = "Co-reference Resolution";
 const description = (
-  <div>
+  <span>
     <span>
     Coreference resolution is the task of finding all expressions that refer to the same entity
     in a text. It is an important step for a lot of higher level NLP tasks that involve natural
@@ -40,7 +40,7 @@ const description = (
     <span>
     in early 2017.
     </span>
-  </div>
+  </span>
 );
 
 
@@ -88,9 +88,8 @@ class CorefInput extends React.Component {
                 <select disabled={outputState === "working"} onChange={this.handleListChange}>
                     <option value="">Choose an example...</option>
                     {corefExamples.map((example, index) => {
-                      const selected = example.document === corefDocumentValue;
                       return (
-                          <option value={index} key={index} selected={selected}>{example.document.substring(0,60) + ".. ."}</option>
+                          <option value={index} key={index}>{example.document.substring(0,60) + ".. ."}</option>
                       );
                     })}
                 </select>
@@ -143,7 +142,7 @@ class CorefOutput extends React.Component {
         var clusters = clusteredWord['clusters'];
 
         if (clusters.includes(this.state.selectedCluster)) {
-          return "passage__answer";
+          return "coref__span";
         }
         else {
           return "unselected";
@@ -157,7 +156,7 @@ class CorefOutput extends React.Component {
             <div className="model__content__summary">
             <ul>
               {clusters.map((cluster, index) =>
-               <li>
+               <li key={ index }>
                 {cluster.map((span, wordIndex) =>
                   <a key={ wordIndex } onMouseEnter={ () => this.onClusterMouseover(index) }> {doc.slice(span[0], span[1] + 1).join(" ")},</a>
                 )}
@@ -171,7 +170,7 @@ class CorefOutput extends React.Component {
             <label>Document</label>
             <div className="passage model__content__summary">
             {clusteredDocument.map((clusteredWord, index) =>
-              <span className={ wordStyle(clusteredWord) }> {clusteredWord['word']}</span>
+              <span key={ index } className={ wordStyle(clusteredWord) }> {clusteredWord['word']}</span>
             )}
             </div>
           </div>

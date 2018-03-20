@@ -13,6 +13,7 @@ MODULE_GLOB = 'allennlp/**/*.py'
 MODULES_THAT_NEED_NO_DOCS: Set[str] = {
         # No docs at top level.
         'allennlp',
+        'allennlp.version',
 
         # No docs for custom extensions, which aren't even in python.
         'allennlp.custom_extensions',
@@ -23,6 +24,10 @@ MODULES_THAT_NEED_NO_DOCS: Set[str] = {
         # TODO(joelgrus): Figure out how to make these docs build;
         # the cffi part is causing problems.
         'allennlp.modules.alternating_highway_lstm',
+        # Private base class, no docs needed.
+        'allennlp.modules.encoder_base',
+        # TODO(Mark): remove this once the coref model is switched over.
+        'allennlp.models.coreference_resolution.coref_v2'
 }
 
 DOCS_THAT_NEED_NO_MODULES: Set[str] = {

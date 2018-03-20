@@ -65,7 +65,8 @@ class BagOfEmbeddingsEncoder(Seq2VecEncoder):
 
     @classmethod
     def from_params(cls, params: Params) -> 'BagOfEmbeddingsEncoder':
-        embedding_dim = params.pop('embedding_dim')
-        averaged = params.pop('averaged', default=None)
+        embedding_dim = params.pop_int('embedding_dim')
+        averaged = params.pop_bool('averaged', default=None)
+        params.assert_empty(cls.__name__)
         return cls(embedding_dim=embedding_dim,
                    averaged=averaged)

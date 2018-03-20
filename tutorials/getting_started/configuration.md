@@ -1,8 +1,4 @@
----
-layout: tutorial
-title: Configuring Experiments
-id: configuration
----
+# Configuring Experiments
 
 Now that we know how to train and evaluate models,
 let's take a deeper look at our experiment configuration file,
@@ -268,7 +264,7 @@ which needs to be a
 [`Seq2SeqEncoder`](http://docs.allennlp.org/en/latest/api/allennlp.modules.seq2seq_encoders.html#allennlp.modules.seq2seq_encoders.seq2seq_encoder.Seq2SeqEncoder):
 
 ```js
-    "stacked_encoder": {
+    "encoder": {
             "type": "lstm",
             "input_size": 100,
             "hidden_size": 100,
@@ -329,4 +325,4 @@ which means that you can always see how a saved model was trained.
 
 ### Next Steps
 
-Continue on to our [Creating a Model](creating-a-model) tutorial.
+Continue on to our [Creating a Model](creating_a_model.md) tutorial.

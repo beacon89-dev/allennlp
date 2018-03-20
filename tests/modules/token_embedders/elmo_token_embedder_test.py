@@ -1,51 +1,65 @@
-# pylint: disable=no-self-use
-
+# pylint: disable=no-self-use,invalid-name
+import filecmp
+import json
 import os
-import numpy
-import h5py
+import tarfile
 
-import torch
-from torch.autograd import Variable
+from allennlp.commands.train import train_model
+from allennlp.common import Params
+from allennlp.common.testing import ModelTestCase
+from allennlp.data.dataset import Batch
 
+class TestElmoTokenEmbedder(ModelTestCase):
+    def setUp(self):
+        super().setUp()
+        self.set_up_model('tests/fixtures/elmo/config/characters_token_embedder.json',
+                          'tests/fixtures/data/conll2003.txt')
 
-from allennlp.common.testing import AllenNlpTestCase
-from allennlp.modules.token_embedders.elmo_token_embedder import ELMoTokenEmbedder
-from allennlp.data.token_indexers.elmo_indexer import ELMoTokenCharactersIndexer
-from allennlp.data import Token, Vocabulary
+    def test_tagger_with_elmo_token_embedder_can_train_save_and_load(self):
+        self.ensure_model_can_train_save_and_load(self.param_file)
 
-FIXTURES = os.path.join('tests', 'fixtures', 'elmo')
+    def test_tagger_with_elmo_token_embedder_forward_pass_runs_correctly(self):
+        dataset = Batch(self.instances)
+        dataset.index_instances(self.vocab)
+        training_tensors = dataset.as_tensor_dict()
+        output_dict = self.model(**training_tensors)
+        tags = output_dict['tags']
+        assert len(tags) == 2
+        assert len(tags[0]) == 7
+        assert len(tags[1]) == 7
+        for example_tags in tags:
+            for tag_id in example_tags:
+                tag = self.model.vocab.get_token_from_index(tag_id, namespace="labels")
+                assert tag in {'O', 'I-ORG', 'I-PER', 'I-LOC'}
 
+    def test_file_archiving(self):
+        # This happens to be a good place to test auxiliary file archiving.
 
-class TestELMoTokenEmbedder(AllenNlpTestCase):
-    def test_elmo_token_embedder(self):
-        # Load the test words and convert to char ids
-        with open(os.path.join(FIXTURES, 'vocab_test.txt'), 'r') as fin:
-            tokens = fin.read().strip().split('\n')
+        # Train the model
+        params = Params.from_file('tests/fixtures/elmo/config/characters_token_embedder.json')
+        serialization_dir = os.path.join(self.TEST_DIR, 'serialization')
+        train_model(params, serialization_dir)
 
-        indexer = ELMoTokenCharactersIndexer()
-        indices = [indexer.token_to_indices(Token(token), Vocabulary()) for token in tokens]
-        # There are 448 tokens. Reshape into 10 batches of 45 tokens.
-        sentences = []
-        for k in range(10):
-            sentences.append(
-                    indexer.pad_token_sequence(
-                            indices[(k * 45):((k + 1) * 45)], desired_num_tokens=45, padding_lengths={}
-                    )
-            )
-        batch = Variable(torch.from_numpy(numpy.array(sentences)))
+        # Inspect the archive
+        archive_file = os.path.join(serialization_dir, 'model.tar.gz')
+        unarchive_dir = os.path.join(self.TEST_DIR, 'unarchive')
+        with tarfile.open(archive_file, 'r:gz') as archive:
+            archive.extractall(unarchive_dir)
 
-        options_file = os.path.join(FIXTURES, 'options.json')
-        weight_file = os.path.join(FIXTURES, 'lm_weights.hdf5')
+        # It should contain `files_to_archive.json`
+        fta_file = os.path.join(unarchive_dir, 'files_to_archive.json')
+        assert os.path.exists(fta_file)
 
-        elmo_token_embedder = ELMoTokenEmbedder(options_file, weight_file)
-        token_embedding = elmo_token_embedder(batch)['token_embedding'].data.numpy()
+        # Which should properly contain { hocon_key -> original_filename }
+        with open(fta_file) as fta:
+            files_to_archive = json.loads(fta.read())
 
-        # Reshape back to a list of words and compare with ground truth.  Need to also
-        # remove <S>, </S>
-        actual_embeddings = token_embedding[:, 1:-1, :].reshape(-1, token_embedding.shape[-1])
+        assert files_to_archive == {
+                'model.text_field_embedder.elmo.options_file': 'tests/fixtures/elmo/options.json',
+                'model.text_field_embedder.elmo.weight_file': 'tests/fixtures/elmo/lm_weights.hdf5'
+        }
 
-        embedding_file = os.path.join(FIXTURES, 'elmo_token_embeddings.hdf5')
-        with h5py.File(embedding_file, 'r') as fin:
-            expected_embeddings = fin['embedding'][...]
-
-        assert numpy.allclose(actual_embeddings[:len(tokens)], expected_embeddings, atol=1e-6)
+        # Check that the unarchived contents of those files match the original contents.
+        for key, original_filename in files_to_archive.items():
+            new_filename = os.path.join(unarchive_dir, "fta", key)
+            assert filecmp.cmp(original_filename, new_filename)

@@ -6,7 +6,7 @@ from torch.nn.modules import Linear, Dropout
 import torch.nn.functional as F
 
 from allennlp.common import Params
-from allennlp.common.checks import ConfigurationError
+from allennlp.common.checks import check_dimensions_match
 from allennlp.data import Vocabulary
 from allennlp.modules import Seq2SeqEncoder, TimeDistributed, TextFieldEmbedder
 from allennlp.modules.token_embedders import Embedding
@@ -36,7 +36,7 @@ class SemanticRoleLabeler(Model):
         A Vocabulary, required in order to compute sizes for input/output projections.
     text_field_embedder : ``TextFieldEmbedder``, required
         Used to embed the ``tokens`` ``TextField`` we get as input to the model.
-    stacked_encoder : ``Seq2SeqEncoder``
+    encoder : ``Seq2SeqEncoder``
         The encoder (with its own internal stacking) that we will use in between embedding tokens
         and predicting output tags.
     binary_feature_dim : int, required.
@@ -48,7 +48,7 @@ class SemanticRoleLabeler(Model):
     """
     def __init__(self, vocab: Vocabulary,
                  text_field_embedder: TextFieldEmbedder,
-                 stacked_encoder: Seq2SeqEncoder,
+                 encoder: Seq2SeqEncoder,
                  binary_feature_dim: int,
                  embedding_dropout: float = 0.0,
                  initializer: InitializerApplicator = InitializerApplicator(),
@@ -62,18 +62,17 @@ class SemanticRoleLabeler(Model):
         # for verb, because the verb index is provided to the model.
         self.span_metric = SpanBasedF1Measure(vocab, tag_namespace="labels", ignore_classes=["V"])
 
-        self.stacked_encoder = stacked_encoder
+        self.encoder = encoder
         # There are exactly 2 binary features for the verb predicate embedding.
         self.binary_feature_embedding = Embedding(2, binary_feature_dim)
-        self.tag_projection_layer = TimeDistributed(Linear(self.stacked_encoder.get_output_dim(),
+        self.tag_projection_layer = TimeDistributed(Linear(self.encoder.get_output_dim(),
                                                            self.num_classes))
         self.embedding_dropout = Dropout(p=embedding_dropout)
 
-        if text_field_embedder.get_output_dim() + binary_feature_dim != stacked_encoder.get_input_dim():
-            raise ConfigurationError("The SRL Model uses a binary verb indicator feature, meaning "
-                                     "the input dimension of the stacked_encoder must be equal to "
-                                     "the output dimension of the text_field_embedder + 1.")
-
+        check_dimensions_match(text_field_embedder.get_output_dim() + binary_feature_dim,
+                               encoder.get_input_dim(),
+                               "text embedding dim + verb indicator embedding dim",
+                               "encoder input dim")
         initializer(self)
 
     def forward(self,  # type: ignore
@@ -120,19 +119,15 @@ class SemanticRoleLabeler(Model):
         # Concatenate the verb feature onto the embedded text. This now
         # has shape (batch_size, sequence_length, embedding_dim + binary_feature_dim).
         embedded_text_with_verb_indicator = torch.cat([embedded_text_input, embedded_verb_indicator], -1)
-        batch_size, sequence_length, embedding_dim_with_binary_feature = embedded_text_with_verb_indicator.size()
+        batch_size, sequence_length, _ = embedded_text_with_verb_indicator.size()
 
-        if self.stacked_encoder.get_input_dim() != embedding_dim_with_binary_feature:
-            raise ConfigurationError("The SRL model uses an indicator feature, which makes "
-                                     "the embedding dimension one larger than the value "
-                                     "specified. Therefore, the 'input_dim' of the stacked_encoder "
-                                     "must be equal to total_embedding_dim + 1.")
-
-        encoded_text = self.stacked_encoder(embedded_text_with_verb_indicator, mask)
+        encoded_text = self.encoder(embedded_text_with_verb_indicator, mask)
 
         logits = self.tag_projection_layer(encoded_text)
         reshaped_log_probs = logits.view(-1, self.num_classes)
-        class_probabilities = F.softmax(reshaped_log_probs).view([batch_size, sequence_length, self.num_classes])
+        class_probabilities = F.softmax(reshaped_log_probs, dim=-1).view([batch_size,
+                                                                          sequence_length,
+                                                                          self.num_classes])
         output_dict = {"logits": logits, "class_probabilities": class_probabilities}
         if tags is not None:
             loss = sequence_cross_entropy_with_logits(logits, tags, mask)
@@ -209,15 +204,15 @@ class SemanticRoleLabeler(Model):
     def from_params(cls, vocab: Vocabulary, params: Params) -> 'SemanticRoleLabeler':
         embedder_params = params.pop("text_field_embedder")
         text_field_embedder = TextFieldEmbedder.from_params(vocab, embedder_params)
-        stacked_encoder = Seq2SeqEncoder.from_params(params.pop("stacked_encoder"))
-        binary_feature_dim = params.pop("binary_feature_dim")
+        encoder = Seq2SeqEncoder.from_params(params.pop("encoder"))
+        binary_feature_dim = params.pop_int("binary_feature_dim")
 
         initializer = InitializerApplicator.from_params(params.pop('initializer', []))
         regularizer = RegularizerApplicator.from_params(params.pop('regularizer', []))
-
+        params.assert_empty(cls.__name__)
         return cls(vocab=vocab,
                    text_field_embedder=text_field_embedder,
-                   stacked_encoder=stacked_encoder,
+                   encoder=encoder,
                    binary_feature_dim=binary_feature_dim,
                    initializer=initializer,
                    regularizer=regularizer)

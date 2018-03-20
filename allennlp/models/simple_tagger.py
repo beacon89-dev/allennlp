@@ -7,7 +7,7 @@ from torch.nn.modules.linear import Linear
 import torch.nn.functional as F
 
 from allennlp.common import Params
-from allennlp.common.checks import ConfigurationError
+from allennlp.common.checks import check_dimensions_match
 from allennlp.data import Vocabulary
 from allennlp.modules import Seq2SeqEncoder, TimeDistributed, TextFieldEmbedder
 from allennlp.models.model import Model
@@ -28,7 +28,7 @@ class SimpleTagger(Model):
         A Vocabulary, required in order to compute sizes for input/output projections.
     text_field_embedder : ``TextFieldEmbedder``, required
         Used to embed the ``tokens`` ``TextField`` we get as input to the model.
-    stacked_encoder : ``Seq2SeqEncoder``
+    encoder : ``Seq2SeqEncoder``
         The encoder (with its own internal stacking) that we will use in between embedding tokens
         and predicting output tags.
     initializer : ``InitializerApplicator``, optional (default=``InitializerApplicator()``)
@@ -39,22 +39,19 @@ class SimpleTagger(Model):
 
     def __init__(self, vocab: Vocabulary,
                  text_field_embedder: TextFieldEmbedder,
-                 stacked_encoder: Seq2SeqEncoder,
+                 encoder: Seq2SeqEncoder,
                  initializer: InitializerApplicator = InitializerApplicator(),
                  regularizer: Optional[RegularizerApplicator] = None) -> None:
         super(SimpleTagger, self).__init__(vocab, regularizer)
 
         self.text_field_embedder = text_field_embedder
         self.num_classes = self.vocab.get_vocab_size("labels")
-        self.stacked_encoder = stacked_encoder
-        self.tag_projection_layer = TimeDistributed(Linear(self.stacked_encoder.get_output_dim(),
+        self.encoder = encoder
+        self.tag_projection_layer = TimeDistributed(Linear(self.encoder.get_output_dim(),
                                                            self.num_classes))
 
-        if text_field_embedder.get_output_dim() != stacked_encoder.get_input_dim():
-            raise ConfigurationError("The output dimension of the text_field_embedder must match the "
-                                     "input dimension of the phrase_encoder. Found {} and {}, "
-                                     "respectively.".format(text_field_embedder.get_output_dim(),
-                                                            stacked_encoder.get_input_dim()))
+        check_dimensions_match(text_field_embedder.get_output_dim(), encoder.get_input_dim(),
+                               "text field embedding dim", "encoder input dim")
         self.metrics = {
                 "accuracy": CategoricalAccuracy(),
                 "accuracy3": CategoricalAccuracy(top_k=3)
@@ -99,11 +96,13 @@ class SimpleTagger(Model):
         embedded_text_input = self.text_field_embedder(tokens)
         batch_size, sequence_length, _ = embedded_text_input.size()
         mask = get_text_field_mask(tokens)
-        encoded_text = self.stacked_encoder(embedded_text_input, mask)
+        encoded_text = self.encoder(embedded_text_input, mask)
 
         logits = self.tag_projection_layer(encoded_text)
         reshaped_log_probs = logits.view(-1, self.num_classes)
-        class_probabilities = F.softmax(reshaped_log_probs).view([batch_size, sequence_length, self.num_classes])
+        class_probabilities = F.softmax(reshaped_log_probs, dim=-1).view([batch_size,
+                                                                          sequence_length,
+                                                                          self.num_classes])
 
         output_dict = {"logits": logits, "class_probabilities": class_probabilities}
 
@@ -144,13 +143,13 @@ class SimpleTagger(Model):
     def from_params(cls, vocab: Vocabulary, params: Params) -> 'SimpleTagger':
         embedder_params = params.pop("text_field_embedder")
         text_field_embedder = TextFieldEmbedder.from_params(vocab, embedder_params)
-        stacked_encoder = Seq2SeqEncoder.from_params(params.pop("stacked_encoder"))
+        encoder = Seq2SeqEncoder.from_params(params.pop("encoder"))
 
         initializer = InitializerApplicator.from_params(params.pop('initializer', []))
         regularizer = RegularizerApplicator.from_params(params.pop('regularizer', []))
-
+        params.assert_empty(cls.__name__)
         return cls(vocab=vocab,
                    text_field_embedder=text_field_embedder,
-                   stacked_encoder=stacked_encoder,
+                   encoder=encoder,
                    initializer=initializer,
                    regularizer=regularizer)

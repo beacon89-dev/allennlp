@@ -35,7 +35,7 @@ const teExamples = [
 
   const title = "Textual Entailment";
   const description = (
-    <div>
+    <span>
       <span>
         Textual Entailment (TE) takes a pair of sentences and predicts whether the facts in the first
         necessarily imply the facts in the second one.  The AllenNLP toolkit provides the following TE visualization,
@@ -49,8 +49,9 @@ const teExamples = [
       <a href = "https://nlp.stanford.edu/projects/snli/" target="_blank" rel="noopener noreferrer">{' '} the SNLI benchmark {' '}</a>
       <span>
         (short sentences about visual scenes) in 2016.
+        Rather than pre-trained Glove vectors, this model uses <a href="https://arxiv.org/abs/1802.05365">ELMo embeddings</a>, which are completely character based and improve performance by 2%
       </span>
-    </div>
+    </span>
   );
 
   class TeInput extends React.Component {
@@ -107,9 +108,8 @@ const teExamples = [
             <select disabled={outputState === "working"} onChange={this.handleListChange}>
               <option value="">Choose an example...</option>
               {teExamples.map((example, index) => {
-                const selected = example.premise === tePremiseValue && example.hypothesis === teHypothesisValue;
                 return (
-                  <option value={index} key={index} selected={selected}>{example.premise}</option>
+                  <option value={index} key={index}>{example.premise}</option>
                 );
               })}
             </select>

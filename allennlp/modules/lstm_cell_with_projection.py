@@ -12,7 +12,7 @@ from allennlp.nn.util import get_dropout_mask
 from allennlp.nn.initializers import block_orthogonal
 
 
-class LSTMCellWithProjection(torch.nn.Module):
+class LstmCellWithProjection(torch.nn.Module):
     """
     An LSTM with Recurrent Dropout and a projected and clipped hidden state and
     memory. Note: this implementation is slower than the native Pytorch LSTM because
@@ -62,7 +62,7 @@ class LSTMCellWithProjection(torch.nn.Module):
                  recurrent_dropout_probability: float = 0.0,
                  memory_cell_clip_value: Optional[float] = None,
                  state_projection_clip_value: Optional[float] = None) -> None:
-        super(LSTMCellWithProjection, self).__init__()
+        super(LstmCellWithProjection, self).__init__()
         # Required to be wrapped with a :class:`PytorchSeq2SeqWrapper`.
         self.input_size = input_size
         self.hidden_size = hidden_size
@@ -201,7 +201,7 @@ class LSTMCellWithProjection(torch.nn.Module):
 
             if self.memory_cell_clip_value:
                 # pylint: disable=invalid-unary-operand-type
-                memory.data.clamp_(-self.memory_cell_clip_value, self.memory_cell_clip_value)
+                memory = torch.clamp(memory, -self.memory_cell_clip_value, self.memory_cell_clip_value)
 
             # shape (current_length_index, cell_size)
             pre_projection_timestep_output = output_gate * torch.tanh(memory)
@@ -210,8 +210,9 @@ class LSTMCellWithProjection(torch.nn.Module):
             timestep_output = self.state_projection(pre_projection_timestep_output)
             if self.state_projection_clip_value:
                 # pylint: disable=invalid-unary-operand-type
-                timestep_output.data.clamp_(-self.state_projection_clip_value,
-                                            self.state_projection_clip_value)
+                timestep_output = torch.clamp(timestep_output,
+                                              -self.state_projection_clip_value,
+                                              self.state_projection_clip_value)
 
             # Only do dropout if the dropout prob is > 0.0 and we are in training mode.
             if dropout_mask is not None:

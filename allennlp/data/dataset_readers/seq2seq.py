@@ -3,11 +3,8 @@ import logging
 
 from overrides import overrides
 
-import tqdm
-
 from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
-from allennlp.data.dataset import Dataset
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
 from allennlp.data.fields import TextField
 from allennlp.data.instance import Instance
@@ -31,6 +28,8 @@ class Seq2SeqDatasetReader(DatasetReader):
         source_tokens: ``TextField`` and
         target_tokens: ``TextField``
 
+    `START_SYMBOL` and `END_SYMBOL` tokens are added to the source and target sequences.
+
     Parameters
     ----------
     source_tokenizer : ``Tokenizer``, optional
@@ -45,23 +44,28 @@ class Seq2SeqDatasetReader(DatasetReader):
     target_token_indexers : ``Dict[str, TokenIndexer]``, optional
         Indexers used to define output (target side) token representations. Defaults to
         ``source_token_indexers``.
+    source_add_start_token : bool, (optional, default=True)
+        Whether or not to add `START_SYMBOL` to the beginning of the source sequence.
     """
     def __init__(self,
                  source_tokenizer: Tokenizer = None,
                  target_tokenizer: Tokenizer = None,
                  source_token_indexers: Dict[str, TokenIndexer] = None,
-                 target_token_indexers: Dict[str, TokenIndexer] = None) -> None:
+                 target_token_indexers: Dict[str, TokenIndexer] = None,
+                 source_add_start_token: bool = True,
+                 lazy: bool = False) -> None:
+        super().__init__(lazy)
         self._source_tokenizer = source_tokenizer or WordTokenizer()
         self._target_tokenizer = target_tokenizer or self._source_tokenizer
         self._source_token_indexers = source_token_indexers or {"tokens": SingleIdTokenIndexer()}
         self._target_token_indexers = target_token_indexers or self._source_token_indexers
+        self._source_add_start_token = source_add_start_token
 
     @overrides
-    def read(self, file_path):
-        instances = []
+    def _read(self, file_path):
         with open(file_path, "r") as data_file:
             logger.info("Reading instances from lines in file at: %s", file_path)
-            for line_num, line in enumerate(tqdm.tqdm(data_file)):
+            for line_num, line in enumerate(data_file):
                 line = line.strip("\n")
 
                 if not line:
@@ -71,15 +75,15 @@ class Seq2SeqDatasetReader(DatasetReader):
                 if len(line_parts) != 2:
                     raise ConfigurationError("Invalid line format: %s (line number %d)" % (line, line_num + 1))
                 source_sequence, target_sequence = line_parts
-                instances.append(self.text_to_instance(source_sequence, target_sequence))
-        if not instances:
-            raise ConfigurationError("No instances read!")
-        return Dataset(instances)
+                yield self.text_to_instance(source_sequence, target_sequence)
 
     @overrides
     def text_to_instance(self, source_string: str, target_string: str = None) -> Instance:  # type: ignore
         # pylint: disable=arguments-differ
         tokenized_source = self._source_tokenizer.tokenize(source_string)
+        if self._source_add_start_token:
+            tokenized_source.insert(0, Token(START_SYMBOL))
+        tokenized_source.append(Token(END_SYMBOL))
         source_field = TextField(tokenized_source, self._source_token_indexers)
         if target_string is not None:
             tokenized_target = self._target_tokenizer.tokenize(target_string)
@@ -97,6 +101,7 @@ class Seq2SeqDatasetReader(DatasetReader):
         target_tokenizer_type = params.pop('target_tokenizer', None)
         target_tokenizer = None if target_tokenizer_type is None else Tokenizer.from_params(target_tokenizer_type)
         source_indexers_type = params.pop('source_token_indexers', None)
+        source_add_start_token = params.pop_bool('source_add_start_token', True)
         if source_indexers_type is None:
             source_token_indexers = None
         else:
@@ -106,6 +111,8 @@ class Seq2SeqDatasetReader(DatasetReader):
             target_token_indexers = None
         else:
             target_token_indexers = TokenIndexer.dict_from_params(target_indexers_type)
+        lazy = params.pop('lazy', False)
         params.assert_empty(cls.__name__)
         return Seq2SeqDatasetReader(source_tokenizer, target_tokenizer,
-                                    source_token_indexers, target_token_indexers)
+                                    source_token_indexers, target_token_indexers,
+                                    source_add_start_token, lazy)

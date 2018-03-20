@@ -29,9 +29,9 @@ numpy
 scipy
 scikit-learn
 
-# Training visualisation using tensorboard.
-pillow # A dependency of tensorboard-pytorch which is not recorded.
-tensorboard-pytorch
+# Write logs for training visualisation with the Tensorboard application
+# Install the Tensorboard application separately (part of tensorflow) to view them.
+tensorboardX==1.0
 
 # Required by torch.utils.ffi
 cffi==1.11.2
@@ -40,8 +40,9 @@ cffi==1.11.2
 awscli>=1.11.91
 
 # REST interface for models
-sanic==0.6.0
-sanic-cors==0.6.0.2
+flask==0.12.1
+flask-cors==3.0.3
+gevent==1.2.2
 
 # Talk to postgres demo database
 psycopg2
@@ -54,14 +55,13 @@ argparse
 requests>=2.18
 
 # progress bars in data cleaning scripts
-tqdm
+tqdm>=4.19
 
 # In SQuAD eval script, we use this to see if we likely have some tokenization problem.
 editdistance
 
-# Tutorial notebooks
-jupyter
-
 # For pretrained model weights
 h5py
 
+# For timezone utilities
+pytz==2017.3

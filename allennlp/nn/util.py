@@ -1,18 +1,44 @@
 """
 Assorted utilities for working with neural networks in AllenNLP.
 """
-
-from typing import Dict, List, Optional, Union, Any, Tuple, Callable
+from collections import defaultdict
+from typing import Dict, List, Optional, Any, Tuple, Callable
 import logging
 
 import math
-import numpy
 import torch
 from torch.autograd import Variable
 
 from allennlp.common.checks import ConfigurationError
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
+
+
+def batch_tensor_dicts(tensor_dicts: List[Dict[str, torch.Tensor]],
+                       remove_trailing_dimension: bool = False) -> Dict[str, torch.Tensor]:
+    """
+    Takes a list of tensor dictionaries, where each dictionary is assumed to have matching keys,
+    and returns a single dictionary with all tensors with the same key batched together.
+
+    Parameters
+    ----------
+    tensor_dicts : ``List[Dict[str, torch.Tensor]]``
+        The list of tensor dictionaries to batch.
+    remove_trailing_dimension : ``bool``
+        If ``True``, we will check for a trailing dimension of size 1 on the tensors that are being
+        batched, and remove it if we find it.
+    """
+    key_to_tensors: Dict[str, List[torch.Tensor]] = defaultdict(list)
+    for tensor_dict in tensor_dicts:
+        for key, tensor in tensor_dict.items():
+            key_to_tensors[key].append(tensor)
+    batched_tensors = {}
+    for key, tensor_list in key_to_tensors.items():
+        batched_tensor = torch.stack(tensor_list)
+        if remove_trailing_dimension and all(tensor.size(-1) == 1 for tensor in tensor_list):
+            batched_tensor = batched_tensor.squeeze(-1)
+        batched_tensors[key] = batched_tensor
+    return batched_tensors
 
 
 def get_lengths_from_binary_sequence_mask(mask: torch.Tensor):
@@ -34,7 +60,8 @@ def get_lengths_from_binary_sequence_mask(mask: torch.Tensor):
     return mask.long().sum(-1)
 
 
-def sort_batch_by_length(tensor: torch.autograd.Variable, sequence_lengths: torch.autograd.Variable):
+def sort_batch_by_length(tensor: torch.autograd.Variable,
+                         sequence_lengths: torch.autograd.Variable):
     """
     Sort a batch first tensor by some specified lengths.
 
@@ -55,6 +82,9 @@ def sort_batch_by_length(tensor: torch.autograd.Variable, sequence_lengths: torc
     restoration_indices : Variable(torch.LongTensor)
         Indices into the sorted_tensor such that
         ``sorted_tensor.index_select(0, restoration_indices) == original_tensor``
+    permuation_index : Variable(torch.LongTensor)
+        The indices used to sort the tensor. This is useful if you want to sort many
+        tensors using the same ordering.
     """
 
     if not isinstance(tensor, Variable) or not isinstance(sequence_lengths, Variable):
@@ -72,7 +102,7 @@ def sort_batch_by_length(tensor: torch.autograd.Variable, sequence_lengths: torc
     index_range = Variable(index_range.long())
     _, reverse_mapping = permutation_index.sort(0, descending=False)
     restoration_indices = index_range.index_select(0, reverse_mapping)
-    return sorted_tensor, sorted_sequence_lengths, restoration_indices
+    return sorted_tensor, sorted_sequence_lengths, restoration_indices, permutation_index
 
 
 def get_dropout_mask(dropout_probability: float, tensor_for_masking: torch.autograd.Variable):
@@ -102,56 +132,6 @@ def get_dropout_mask(dropout_probability: float, tensor_for_masking: torch.autog
     return dropout_mask
 
 
-def arrays_to_variables(data_structure: Dict[str, Union[dict, numpy.ndarray]],
-                        cuda_device: int = -1,
-                        add_batch_dimension: bool = False,
-                        for_training: bool = True):
-    """
-    Convert an (optionally) nested dictionary of arrays to Pytorch ``Variables``,
-    suitable for use in a computation graph.
-
-    Parameters
-    ----------
-    data_structure : Dict[str, Union[dict, numpy.ndarray]], required.
-        The nested dictionary of arrays to convert to Pytorch ``Variables``.
-    cuda_device : int, optional (default = -1)
-        If cuda_device <= 0, GPUs are available and Pytorch was compiled with
-        CUDA support, the tensor will be copied to the cuda_device specified.
-    add_batch_dimension : bool, optional (default = False).
-        Optionally add a batch dimension to tensors converted to ``Variables``
-        using this function. This is useful during inference for passing
-        tensors representing a single example to a Pytorch model which
-        would otherwise not have a batch dimension.
-    for_training : ``bool``, optional (default = ``True``)
-        If ``False``, we will pass the ``volatile=True`` flag when constructing variables, which
-        disables gradient computations in the graph.  This makes inference more efficient
-        (particularly in memory usage), but is incompatible with training models.
-
-    Returns
-    -------
-    The original data structure or tensor converted to a Pytorch ``Variable``.
-    """
-    if isinstance(data_structure, dict):
-        for key, value in data_structure.items():
-            # This check is a bit hacky, but I'm not sure how else to handle this.  By this point,
-            # we've lost all reference to the original `Field` object.
-            if 'metadata' in key:
-                if add_batch_dimension:
-                    data_structure[key] = [value]
-            else:
-                data_structure[key] = arrays_to_variables(value, cuda_device, add_batch_dimension)
-        return data_structure
-    else:
-        tensor = torch.from_numpy(data_structure)
-        if add_batch_dimension:
-            tensor.unsqueeze_(0)
-        torch_variable = Variable(tensor, volatile=not for_training)
-        if cuda_device == -1:
-            return torch_variable
-        else:
-            return torch_variable.cuda(cuda_device)
-
-
 def masked_softmax(vector, mask):
     """
     ``torch.nn.functional.softmax(vector)`` does not work if some elements of ``vector`` should be
@@ -165,10 +145,10 @@ def masked_softmax(vector, mask):
     that uses categorical cross-entropy loss.
     """
     if mask is None:
-        result = torch.nn.functional.softmax(vector)
+        result = torch.nn.functional.softmax(vector, dim=-1)
     else:
-        # To limit numerical errors from large vector elements outside mask, we zero these out
-        result = torch.nn.functional.softmax(vector * mask)
+        # To limit numerical errors from large vector elements outside the mask, we zero these out.
+        result = torch.nn.functional.softmax(vector * mask, dim=-1)
         result = result * mask
         result = result / (result.sum(dim=1, keepdim=True) + 1e-13)
     return result
@@ -182,13 +162,24 @@ def masked_log_softmax(vector, mask):
 
     We assume that both ``vector`` and ``mask`` (if given) have shape ``(batch_size, vector_dim)``.
 
-    In the case that the input vector is completely masked, this function returns an array
-    of ``0.0``.  You should be masking the result of whatever computation comes out of this in that
-    case, anyway, so it shouldn't matter.
+    In the case that the input vector is completely masked, the return value of this function is
+    arbitrary, but not ``nan``.  You should be masking the result of whatever computation comes out
+    of this in that case, anyway, so the specific values returned shouldn't matter.  Also, the way
+    that we deal with this case relies on having single-precision floats; mixing half-precision
+    floats with fully-masked vectors will likely give you ``nans``.
+
+    If your logits are all extremely negative (i.e., the max value in your logit vector is -50 or
+    lower), the way we handle masking here could mess you up.  But if you've got logit values that
+    extreme, you've got bigger problems than this.
     """
     if mask is not None:
-        vector = vector + mask.log()
-    return torch.nn.functional.log_softmax(vector)
+        # vector + mask.log() is an easy way to zero out masked elements in logspace, but it
+        # results in nans when the whole vector is masked.  We need a very small value instead of a
+        # zero in the mask for these cases.  log(1 + 1e-45) is still basically 0, so we can safely
+        # just add 1e-45 before calling mask.log().  We use 1e-45 because 1e-46 is so small it
+        # becomes 0 - this is just the smallest value we can actually use.
+        vector = vector + (mask + 1e-45).log()
+    return torch.nn.functional.log_softmax(vector, dim=1)
 
 
 def viterbi_decode(tag_sequence: torch.Tensor,
@@ -277,19 +268,29 @@ def viterbi_decode(tag_sequence: torch.Tensor,
     return viterbi_path, viterbi_score
 
 
-def get_text_field_mask(text_field_tensors: Dict[str, torch.Tensor]) -> torch.LongTensor:
+def get_text_field_mask(text_field_tensors: Dict[str, torch.Tensor],
+                        num_wrapping_dims: int = 0) -> torch.LongTensor:
     """
-    Takes the dictionary of tensors produced by a ``TextField`` and returns a mask of shape
-    ``(batch_size, num_tokens)``.  This mask will be 0 where the tokens are padding, and 1
-    otherwise.
+    Takes the dictionary of tensors produced by a ``TextField`` and returns a mask
+    with 0 where the tokens are padding, and 1 otherwise.  We also handle ``TextFields``
+    wrapped by an arbitrary number of ``ListFields``, where the number of wrapping ``ListFields``
+    is given by ``num_wrapping_dims``.
+
+    If ``num_wrapping_dims == 0``, the returned mask has shape ``(batch_size, num_tokens)``.
+    If ``num_wrapping_dims > 0`` then the returned mask has ``num_wrapping_dims`` extra
+    dimensions, so the shape will be ``(batch_size, ..., num_tokens)``.
 
     There could be several entries in the tensor dictionary with different shapes (e.g., one for
-    word ids, one for character ids).  In order to get a token mask, we assume that the tensor in
-    the dictionary with the lowest number of dimensions has plain token ids.  This allows us to
-    also handle cases where the input is actually a ``ListField[TextField]``.
+    word ids, one for character ids).  In order to get a token mask, we use the tensor in
+    the dictionary with the lowest number of dimensions.  After subtracting ``num_wrapping_dims``,
+    if this tensor has two dimensions we assume it has shape ``(batch_size, ..., num_tokens)``,
+    and use it for the mask.  If instead it has three dimensions, we assume it has shape
+    ``(batch_size, ..., num_tokens, num_features)``, and sum over the last dimension to produce
+    the mask.  Most frequently this will be a character id tensor, but it could also be a
+    featurized representation of each token, etc.
 
     NOTE: Our functions for generating masks create torch.LongTensors, because using
-    torch.byteTensors inside Variables makes it easy to run into overflow errors
+    torch.ByteTensors inside Variables makes it easy to run into overflow errors
     when doing mask manipulation, such as summing to get the lengths of sequences - see below.
     >>> mask = torch.ones([260]).byte()
     >>> mask.sum() # equals 260.
@@ -298,10 +299,16 @@ def get_text_field_mask(text_field_tensors: Dict[str, torch.Tensor]) -> torch.Lo
     """
     tensor_dims = [(tensor.dim(), tensor) for tensor in text_field_tensors.values()]
     tensor_dims.sort(key=lambda x: x[0])
-    token_tensor = tensor_dims[0][1]
 
-    return (token_tensor != 0).long()
-
+    smallest_dim = tensor_dims[0][0] - num_wrapping_dims
+    if smallest_dim == 2:
+        token_tensor = tensor_dims[0][1]
+        return (token_tensor != 0).long()
+    elif smallest_dim == 3:
+        character_tensor = tensor_dims[0][1]
+        return ((character_tensor > 0).long().sum(dim=-1) > 0).long()
+    else:
+        raise ValueError("Expected a tensor with dimension 2 or 3, found {}".format(smallest_dim))
 
 def _last_dimension_applicator(function_to_apply: Callable[[torch.Tensor, Optional[torch.Tensor]], torch.Tensor],
                                tensor: torch.Tensor,
@@ -384,7 +391,8 @@ def weighted_sum(matrix: torch.Tensor, attention: torch.Tensor) -> torch.Tensor:
 def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
                                        targets: torch.LongTensor,
                                        weights: torch.FloatTensor,
-                                       batch_average: bool = True) -> torch.FloatTensor:
+                                       batch_average: bool = True,
+                                       label_smoothing: float = None) -> torch.FloatTensor:
     """
     Computes the cross entropy loss of a sequence, weighted with respect to
     some user provided weights. Note that the weighting here is not the same as
@@ -405,6 +413,11 @@ def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
     batch_average : bool, optional, (default = True).
         A bool indicating whether the loss should be averaged across the batch,
         or returned as a vector of losses per batch element.
+    label_smoothing : ``float``, optional (default = None)
+        Whether or not to apply label smoothing to the cross-entropy loss.
+        For example, with a label smoothing value of 0.2, a 4 class classifcation
+        target would look like ``[0.05, 0.05, 0.85, 0.05]`` if the 3rd class was
+        the correct label.
 
     Returns
     -------
@@ -416,15 +429,24 @@ def sequence_cross_entropy_with_logits(logits: torch.FloatTensor,
     # shape : (batch * sequence_length, num_classes)
     logits_flat = logits.view(-1, logits.size(-1))
     # shape : (batch * sequence_length, num_classes)
-    log_probs_flat = torch.nn.functional.log_softmax(logits_flat)
+    log_probs_flat = torch.nn.functional.log_softmax(logits_flat, dim=-1)
     # shape : (batch * max_len, 1)
     targets_flat = targets.view(-1, 1).long()
 
-    # Contribution to the negative log likelihood only comes from the exact indices
-    # of the targets, as the target distributions are one-hot. Here we use torch.gather
-    # to extract the indices of the num_classes dimension which contribute to the loss.
-    # shape : (batch * sequence_length, 1)
-    negative_log_likelihood_flat = - torch.gather(log_probs_flat, dim=1, index=targets_flat)
+    if label_smoothing is not None and label_smoothing > 0.0:
+        num_classes = logits.size(-1)
+        smoothing_value = label_smoothing / num_classes
+        # Fill all the correct indices with 1 - smoothing value.
+        one_hot_targets = zeros_like(log_probs_flat).scatter_(-1, targets_flat, 1.0 - label_smoothing)
+        smoothed_targets = one_hot_targets + smoothing_value
+        negative_log_likelihood_flat = - log_probs_flat * smoothed_targets
+        negative_log_likelihood_flat = negative_log_likelihood_flat.sum(-1, keepdim=True)
+    else:
+        # Contribution to the negative log likelihood only comes from the exact indices
+        # of the targets, as the target distributions are one-hot. Here we use torch.gather
+        # to extract the indices of the num_classes dimension which contribute to the loss.
+        # shape : (batch * sequence_length, 1)
+        negative_log_likelihood_flat = - torch.gather(log_probs_flat, dim=1, index=targets_flat)
     # shape : (batch, sequence_length)
     negative_log_likelihood = negative_log_likelihood_flat.view(*targets.size())
     # shape : (batch, sequence_length)
@@ -473,6 +495,14 @@ def ones_like(tensor: torch.Tensor) -> torch.Tensor:
     device at runtime.
     """
     return tensor.clone().fill_(1)
+
+
+def zeros_like(tensor: torch.Tensor) -> torch.Tensor:
+    """
+    Use clone() + fill_() to make sure that a zeros tensor ends up on the right
+    device at runtime.
+    """
+    return tensor.clone().fill_(0)
 
 
 def combine_tensors(combination: str, tensors: List[torch.Tensor]) -> torch.Tensor:
@@ -589,6 +619,15 @@ def logsumexp(tensor: torch.Tensor,
         stable_vec = tensor - max_score.unsqueeze(dim)
     return max_score + (stable_vec.exp().sum(dim, keepdim=keepdim)).log()
 
+def get_device_of(tensor: torch.Tensor) -> int:
+    """
+    Returns the device of the tensor.
+    """
+    if not tensor.is_cuda:
+        return -1
+    else:
+        return tensor.get_device()
+
 def flatten_and_batch_shift_indices(indices: torch.Tensor,
                                     sequence_length: int) -> torch.Tensor:
     """
@@ -621,7 +660,7 @@ def flatten_and_batch_shift_indices(indices: torch.Tensor,
     offset_indices : ``torch.LongTensor``
     """
     # Shape: (batch_size)
-    offsets = get_range_vector(indices.size(0), indices.is_cuda) * sequence_length
+    offsets = get_range_vector(indices.size(0), get_device_of(indices)) * sequence_length
     for _ in range(len(indices.size()) - 1):
         offsets = offsets.unsqueeze(1)
 
@@ -718,13 +757,13 @@ def flattened_index_select(target: torch.Tensor,
     return selected
 
 
-def get_range_vector(size: int, is_cuda: bool) -> torch.Tensor:
+def get_range_vector(size: int, device: int) -> torch.Tensor:
     """
     Returns a range vector with the desired size, starting at 0. The CUDA implementation
     is meant to avoid copy data from CPU to GPU.
     """
-    if is_cuda:
-        indices = torch.cuda.LongTensor(size).fill_(1).cumsum(0) - 1
+    if device > -1:
+        indices = torch.cuda.LongTensor(size, device=device).fill_(1).cumsum(0) - 1
     else:
         indices = torch.arange(0, size).long()
     return Variable(indices, requires_grad=False)
@@ -802,7 +841,8 @@ def add_sentence_boundary_token_ids(tensor: torch.Tensor,
         The new mask for the tensor, taking into account the appended tokens
         marking the beginning and end of the sentence.
     """
-    sequence_lengths = mask.sum(dim=1).data.numpy()
+    # TODO: matthewp, profile this transfer
+    sequence_lengths = mask.sum(dim=1).data.cpu().numpy()
     tensor_shape = list(tensor.data.shape)
     new_shape = list(tensor_shape)
     new_shape[1] = tensor_shape[1] + 2
@@ -818,8 +858,104 @@ def add_sentence_boundary_token_ids(tensor: torch.Tensor,
         for i, j in enumerate(sequence_lengths):
             tensor_with_boundary_tokens[i, 0, :] = sentence_begin_token
             tensor_with_boundary_tokens[i, j + 1, :] = sentence_end_token
-        new_mask = ((tensor_with_boundary_tokens > 0).sum(dim=-1) > 0).long()
+        new_mask = ((tensor_with_boundary_tokens > 0).long().sum(dim=-1) > 0).long()
     else:
         raise ValueError("add_sentence_boundary_token_ids only accepts 2D and 3D input")
 
     return tensor_with_boundary_tokens, new_mask
+
+def remove_sentence_boundaries(tensor: torch.Tensor,
+                               mask: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Remove begin/end of sentence embeddings from the batch of sentences.
+    Given a batch of sentences with size ``(batch_size, timesteps, dim)``
+    this returns a tensor of shape ``(batch_size, timesteps - 2, dim)`` after removing
+    the beginning and end sentence markers.  The sentences are assumed to be padded on the right,
+    with the beginning of each sentence assumed to occur at index 0 (i.e., ``mask[:, 0]`` is assumed
+    to be 1).
+
+    Returns both the new tensor and updated mask.
+
+    This function is the inverse of ``add_sentence_boundary_token_ids``.
+
+    Parameters
+    ----------
+    tensor : ``torch.Tensor``
+        A tensor of shape ``(batch_size, timesteps, dim)``
+    mask : ``torch.Tensor``
+         A tensor of shape ``(batch_size, timesteps)``
+
+    Returns
+    -------
+    tensor_without_boundary_tokens : ``torch.Tensor``
+        The tensor after removing the boundary tokens of shape ``(batch_size, timesteps - 2, dim)``
+    new_mask : ``torch.Tensor``
+        The new mask for the tensor of shape ``(batch_size, timesteps - 2)``.
+    """
+    # TODO: matthewp, profile this transfer
+    sequence_lengths = mask.sum(dim=1).data.cpu().numpy()
+    tensor_shape = list(tensor.data.shape)
+    new_shape = list(tensor_shape)
+    new_shape[1] = tensor_shape[1] - 2
+    tensor_without_boundary_tokens = Variable(tensor.data.new(*new_shape).fill_(0))
+    new_mask = Variable(tensor.data.new(new_shape[0], new_shape[1]).fill_(0)).long()
+    for i, j in enumerate(sequence_lengths):
+        if j > 2:
+            tensor_without_boundary_tokens[i, :(j - 2), :] = tensor[i, 1:(j - 1), :]
+            new_mask[i, :(j - 2)] = 1
+
+    return tensor_without_boundary_tokens, new_mask
+
+
+def add_positional_features(tensor: torch.Tensor,
+                            min_timescale: float = 1.0,
+                            max_timescale: float = 1.0e4):
+    # pylint: disable=line-too-long
+    """
+    Implements the frequency-based positional encoding described
+    in `Attention is all you Need
+    <https://www.semanticscholar.org/paper/Attention-Is-All-You-Need-Vaswani-Shazeer/0737da0767d77606169cbf4187b83e1ab62f6077>`_ .
+
+    Adds sinusoids of different frequencies to a ``Tensor``. A sinusoid of a
+    different frequency and phase is added to each dimension of the input ``Tensor``.
+    This allows the attention heads to use absolute and relative positions.
+
+    The number of timescales is equal to hidden_dim / 2 within the range
+    (min_timescale, max_timescale). For each timescale, the two sinusoidal
+    signals sin(timestep / timescale) and cos(timestep / timescale) are
+    generated and concatenated along the hidden_dim dimension.
+
+    Parameters
+    ----------
+    tensor : ``torch.Tensor``
+        a Tensor with shape (batch_size, timesteps, hidden_dim).
+    min_timescale : ``float``, optional (default = 1.0)
+        The smallest timescale to use.
+    max_timescale : ``float``, optional (default = 1.0e4)
+        The largest timescale to use.
+
+    Returns
+    -------
+    The input tensor augmented with the sinusoidal frequencies.
+    """
+    _, timesteps, hidden_dim = tensor.size()
+
+    timestep_range = get_range_vector(timesteps, get_device_of(tensor)).data.float()
+    # We're generating both cos and sin frequencies,
+    # so half for each.
+    num_timescales = hidden_dim // 2
+    timescale_range = get_range_vector(num_timescales, get_device_of(tensor)).data.float()
+
+    log_timescale_increments = math.log(float(max_timescale) / float(min_timescale)) / float(num_timescales - 1)
+    inverse_timescales = min_timescale * torch.exp(timescale_range * -log_timescale_increments)
+
+    # Broadcasted multiplication - shape (timesteps, num_timescales)
+    scaled_time = timestep_range.unsqueeze(1) * inverse_timescales.unsqueeze(0)
+    # shape (timesteps, 2 * num_timescales)
+    sinusoids = Variable(torch.cat([torch.sin(scaled_time), torch.cos(scaled_time)], 1))
+    if hidden_dim % 2 != 0:
+        # if the number of dimensions is odd, the cos and sin
+        # timescales had size (hidden_dim - 1) / 2, so we need
+        # to add a row of zeros to make up the difference.
+        sinusoids = torch.cat([sinusoids, Variable(sinusoids.data.new(timesteps, 1).fill_(0))], 1)
+    return tensor + sinusoids.unsqueeze(0)

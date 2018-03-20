@@ -736,7 +736,6 @@ h1 {
 header {
   width: 100%;
   background: #fff;
-  height: 5.125em;
   border-bottom: .125em solid #e5eaf0
 }
 
@@ -808,7 +807,6 @@ header {
 
 .header__content .nav__link span {
   font-size: 1em;
-  font-size: 1.125em;
   height: 100%;
   -webkit-transition: color .2s ease;
   transition: color .2s ease;
@@ -1094,8 +1092,30 @@ svg {
   min-height: 34.375em
 }
 
+.pane__horizontal {
+  display: -webkit-box;
+  display: -ms-flexbox;
+  display: -webkit-flex;
+  display: flex;
+  -webkit-flex-direction: column;
+  -ms-flex-direction: column;
+  -webkit-box-orient: vertical;
+  -webkit-box-direction: normal;
+  flex-direction: column;
+  position: relative;
+  -webkit-box-flex: 2;
+  -webkit-flex: 2;
+  -ms-flex: 2;
+  flex: 2;
+  height: auto;
+  min-height: 100%;
+  min-height: 34.375em
+}
+
 .pane__left,
-.pane__right {
+.pane__right,
+.pane__top,
+.pane__bottom {
   width: 100%;
   height: 100%;
   -webkit-align-self: stretch;
@@ -1103,6 +1123,17 @@ svg {
   align-self: stretch;
   min-width: 24em;
   min-height: 34.375em
+}
+
+.pane__top {
+  min-height: 40em;
+  height: auto;
+}
+
+.pane__bottom {
+  min-height: 100%;
+  overflow: auto;
+  height: auto;
 }
 
 .pane__left {
@@ -1521,6 +1552,11 @@ svg {
   color: #1c2f3a;
 }
 
+.coref__span {
+  background-color: #40affd;
+  color: #fff;
+}
+
 .hierplane__visualization-verbs {
   background: #f9fafc;
   padding: 1em 1.25em;
@@ -1583,20 +1619,10 @@ svg {
 }
 
 /*
-  Set a max width so that nodes aren't too wide, since some of the nodes in the AllenNLP
-  SRL output can contain large passages of text.
-*/
-.hierplane__visualization .hierplane .node__word__label .node__word__label__siblings {
-  max-width: 15vw;
-  white-space: normal;
-}
-
-/*
   Adjust the "passage" display so that it accomodates the entire sentence, if possible. This
   prevents the user from having to scroll when the sentence is long.
 */
 .hierplane__visualization .hierplane--theme-light #passage {
-  max-height: initial;
   height: auto !important;
   flex: 1;
 }
@@ -1606,4 +1632,86 @@ svg {
  */
 .hierplane__visualization .hierplane #passage p span {
   display: inline;
+}
+
+/*
+  The main container element
+ */
+.Collapsible {
+  background-color: rgb(255, 255, 255);
+}
+
+
+/*
+  The content within the collaspable area
+ */
+.Collapsible__contentInner {
+  padding: 10px;
+  border: 1px solid rgb(235, 235, 235);
+  border-top: 0;
+
+}
+
+.Collapsible__contentInner p {
+  margin-bottom: 10px;
+  font-size: 14px;
+  line-height: 20px;
+}
+
+.Collapsible__contentInner p:last-child {
+  margin-bottom: 0;
+}
+
+/*
+  The link which when clicked opens the collapsable area
+ */
+.Collapsible__trigger {
+  display: block;
+  font-weight: 400;
+  text-decoration: none;
+  color: rgb(51, 51, 51);
+  position: relative;
+  border: 1px solid white;
+  padding: 10px;
+  background: #2085bc;
+  color: white;
+}
+
+.Collapsible__trigger:hover {
+  cursor: pointer;
+}
+
+.Collapsible__trigger:after {
+  font-family: 'FontAwesome';
+  content: '\f107';
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  display: block;
+  transition: transform 300ms;
+}
+
+.Collapsible__trigger .is-open:after {
+  transform: rotateZ(180deg);
+}
+
+.Collapsible__trigger .is-open .is-disabled {
+  opacity: 0.5;
+  background-color: grey;
+}
+
+.CustomTriggerCSS {
+  background-color: lightcoral;
+  transition: background-color 200ms ease;
+}
+
+.CustomTriggerCSS--open {
+  background-color: darkslateblue;
+}
+
+.Collapsible__custom-sibling {
+  padding: 5px;
+  font-size: 12px;
+  background-color: #CBB700;
+  color: black;
 }

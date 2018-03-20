@@ -20,7 +20,7 @@ const srlSentences = [
 
 const title = "Semantic Role Labeling";
 const description = (
-  <div>
+  <span>
     <span>
       Semantic Role Labeling (SRL) recovers the latent predicate argument structure of a sentence,
       providing representations that answer basic questions about sentence meaning, including “who” did “what” to “whom,” etc.
@@ -31,7 +31,7 @@ const description = (
     <span>
       , which is currently state of the art for PropBank SRL (Newswire sentences).
     </span>
-  </div>
+  </span>
 );
 
 const attributeToDisplayLabel = {
@@ -167,9 +167,10 @@ function toHierplaneTrees(response) {
     };
   });
 
-  // Filter out the trees with only a single child (AllenNLP's SRL output includes a node
-  // for each verb with a single child, the verb itself).
-  return trees.filter(t => t.root.children.length > 1);
+  // Filter out the trees without any children, as Hierplane can't render something that isn't
+  // a tree of at least one level. We can remove this once this bug is fixed:
+  // https://github.com/allenai/hierplane/issues/74
+  return trees.filter(t => t.root.children.length > 0);
 }
 
 class SrlInput extends React.Component {
@@ -215,9 +216,8 @@ class SrlInput extends React.Component {
           <select disabled={outputState === "working"} onChange={this.handleListChange}>
             <option>Choose an example...</option>
             {srlSentences.map((sentence, index) => {
-              const selected = sentence === srlSentenceValue;
               return (
-                <option value={index} key={index} selected={selected}>{sentence}</option>
+                <option value={index} key={index}>{sentence}</option>
               );
             })}
           </select>
@@ -239,92 +239,18 @@ class SrlInput extends React.Component {
   <SrlOutput /> Component
 *******************************************************************************/
 
-// Render the SRL tag for a single word as a table cell
-class SrlTagCell extends React.Component {
-
-  render() {
-    const { tag, colorClass } = this.props;
-
-    // Don't show "O" tags, and slice off all the "B-" and "I-" prefixes.
-    const tagText = tag === "O" ? "" : tag.slice(2);
-
-    return (
-      <td className={colorClass + ' srl-tag srl-tag-' + tag.toLowerCase()}>
-        {tagText}
-      </td>
-    )
-  }
-}
-
-// Render a SRL-tagged word as a table cell
-class SrlWordCell extends React.Component {
-  render() {
-    const { word, colorClass } = this.props;
-
-    return (<td className={colorClass + ' srl-word'}>{word}</td>)
-  }
-}
-
-class SrlFrame extends React.Component {
-  render() {
-    const { verb, words } = this.props;
-    const tags = verb["tags"];
-
-
-    // Skip frames that have only one tag; these are typically helper verbs.
-    // In an ideal world we'd filter these out on the backend, but the POS
-    // tagger we're using right now doesn't seem up to the task.
-    const numTags = tags.filter(tag => tag !== "O").length
-    if (numTags <= 1) {
-      return (<div />)
-    }
-
-    // Create an array indicating what color to highlight each tag cell.
-    // For "O" tags this should be -1, indicating no color.
-    // Otherwise it should toggle between 0 and 1 every time a "B-" tag occurs.
-    var colorClasses = [];
-    var currentColor = 1;
-
-    tags.forEach(function (tag, i) {
-      if (tag === "O") {
-        // "O" tag, so append "" for "no color"
-        colorClasses.push("");
-      } else if (tag[0] === "B") {
-        // "B-" tag, so toggle the current color and then append
-        currentColor = (currentColor + 1) % 2;
-        colorClasses.push("color" + currentColor);
-      } else /* (tag[0] == "I") */ {
-        // "I-" tag, so append the current color
-        colorClasses.push("color" + currentColor);
-      }
-    })
-
-    return (
-      <div>
-        <label>{verb.verb}</label>
-        <table className="srl-table">
-          <tbody>
-            <tr>
-              {tags.map((tag, i) => <SrlTagCell tag={tag} key={i} colorClass={colorClasses[i]} />)}
-            </tr>
-            <tr>
-              {words.map((word, i) => <SrlWordCell word={word} key={i} colorClass={colorClasses[i]} />)}
-            </tr>
-          </tbody>
-        </table>
-      </div>
-    )
-  }
-}
-
 class SrlOutput extends React.Component {
   render() {
-    const { words, verbs } = this.props;
+    const { verbs } = this.props;
 
     return (
       <div className="model__content model__content--srl-output">
-        <div className="form__field">
-          {verbs.map((verb, i) => (<SrlFrame verb={verb} words={words} key={i} />))}
+        <div>
+          {verbs.map((verb, i) => {
+              return (
+                  <p key={i}><b>{verb.verb}:</b> {verb.description}</p>
+              )
+          })}
         </div>
       </div>
     );
@@ -390,7 +316,7 @@ class HierplaneVisualization extends React.Component {
 
 const VisualizationType = {
   TREE: 'Tree',
-  TABLE: 'Table'
+  TEXT: 'Text'
 };
 Object.freeze(VisualizationType);
 
@@ -449,13 +375,12 @@ class _SrlComponent extends React.Component {
     const { visualizationType } = this.state;
 
     const sentence = requestData && requestData.sentence;
-    const words = responseData && responseData.words;
     const verbs = responseData && responseData.verbs;
 
     let viz = null;
     switch(visualizationType) {
-      case VisualizationType.TABLE:
-        viz = <SrlOutput words={words} verbs={verbs} />;
+      case VisualizationType.TEXT:
+        viz = <SrlOutput verbs={verbs} />;
         break;
       case VisualizationType.TREE:
       default:
