@@ -1,5 +1,4 @@
 import copy
-import os
 
 from numpy.testing import assert_allclose
 import torch
@@ -7,7 +6,7 @@ import torch
 from allennlp.commands.train import train_model_from_file
 from allennlp.common import Params
 from allennlp.common.testing.test_case import AllenNlpTestCase
-from allennlp.data import DataIterator, DatasetReader, Vocabulary
+from allennlp.data import DataIterator, DatasetReader, Vocabulary, RegistrableVocabulary
 from allennlp.data.dataset import Batch
 from allennlp.models import Model, load_archive
 
@@ -24,7 +23,13 @@ class ModelTestCase(AllenNlpTestCase):
 
         reader = DatasetReader.from_params(params['dataset_reader'])
         instances = reader.read(dataset_file)
-        vocab = Vocabulary.from_instances(instances)
+        # Use parameters for vocabulary if they are present in the config file, so that choices like
+        # "non_padded_namespaces", "min_count" etc. can be set if needed.
+        if 'vocabulary' in params:
+            vocab_params = params['vocabulary']
+            vocab = RegistrableVocabulary.from_params(params=vocab_params, instances=instances)
+        else:
+            vocab = Vocabulary.from_instances(instances)
         self.vocab = vocab
         self.instances = instances
         self.model = Model.from_params(self.vocab, params['model'])
@@ -38,8 +43,8 @@ class ModelTestCase(AllenNlpTestCase):
                                              param_file: str,
                                              tolerance: float = 1e-4,
                                              cuda_device: int = -1):
-        save_dir = os.path.join(self.TEST_DIR, "save_and_load_test")
-        archive_file = os.path.join(save_dir, "model.tar.gz")
+        save_dir = self.TEST_DIR / "save_and_load_test"
+        archive_file = save_dir / "model.tar.gz"
         model = train_model_from_file(param_file, save_dir)
         loaded_model = load_archive(archive_file, cuda_device=cuda_device).model
         state_keys = model.state_dict().keys()
@@ -50,7 +55,7 @@ class ModelTestCase(AllenNlpTestCase):
             assert_allclose(model.state_dict()[key].cpu().numpy(),
                             loaded_model.state_dict()[key].cpu().numpy(),
                             err_msg=key)
-        params = Params.from_file(self.param_file)
+        params = Params.from_file(param_file)
         reader = DatasetReader.from_params(params['dataset_reader'])
 
         # Need to duplicate params because Iterator.from_params will consume.
@@ -106,9 +111,9 @@ class ModelTestCase(AllenNlpTestCase):
         return model, loaded_model
 
     def assert_fields_equal(self, field1, field2, name: str, tolerance: float = 1e-6) -> None:
-        if isinstance(field1, torch.autograd.Variable):
-            assert_allclose(field1.data.cpu().numpy(),
-                            field2.data.cpu().numpy(),
+        if isinstance(field1, torch.Tensor):
+            assert_allclose(field1.detach().cpu().numpy(),
+                            field2.detach().cpu().numpy(),
                             rtol=tolerance,
                             err_msg=name)
         elif isinstance(field1, dict):
@@ -117,7 +122,7 @@ class ModelTestCase(AllenNlpTestCase):
                 self.assert_fields_equal(field1[key],
                                          field2[key],
                                          tolerance=tolerance,
-                                         name=name + '.' + key)
+                                         name=name + '.' + str(key))
         elif isinstance(field1, (list, tuple)):
             assert len(field1) == len(field2)
             for i, (subfield1, subfield2) in enumerate(zip(field1, field2)):
@@ -125,6 +130,8 @@ class ModelTestCase(AllenNlpTestCase):
                                          subfield2,
                                          tolerance=tolerance,
                                          name=name + f"[{i}]")
+        elif isinstance(field1, (float, int)):
+            assert_allclose([field1], [field2], rtol=tolerance, err_msg=name)
         else:
             assert field1 == field2
 
@@ -133,26 +140,39 @@ class ModelTestCase(AllenNlpTestCase):
         model.zero_grad()
         result = model(**model_batch)
         result["loss"].backward()
-
-        for parameter in model.parameters():
+        has_zero_or_none_grads = {}
+        for name, parameter in model.named_parameters():
             zeros = torch.zeros(parameter.size())
             if parameter.requires_grad:
+
+                if parameter.grad is None:
+                    has_zero_or_none_grads[name] = "No gradient computed (i.e parameter.grad is None)"
+
+                elif parameter.grad.is_sparse or parameter.grad.data.is_sparse:
+                    pass
+
                 # Some parameters will only be partially updated,
                 # like embeddings, so we just check that any gradient is non-zero.
-                assert (parameter.grad.data.cpu() != zeros).any()
+                elif (parameter.grad.cpu() == zeros).all():
+                    has_zero_or_none_grads[name] = f"zeros with shape ({tuple(parameter.grad.size())})"
             else:
                 assert parameter.grad is None
+
+        if has_zero_or_none_grads:
+            for name, grad in has_zero_or_none_grads.items():
+                print(f"Parameter: {name} had incorrect gradient: {grad}")
+            raise Exception("Incorrect gradients found. See stdout for more info.")
 
     def ensure_batch_predictions_are_consistent(self):
         self.model.eval()
         single_predictions = []
         for i, instance in enumerate(self.instances):
             dataset = Batch([instance])
-            tensors = dataset.as_tensor_dict(dataset.get_padding_lengths(), for_training=False)
+            tensors = dataset.as_tensor_dict(dataset.get_padding_lengths())
             result = self.model(**tensors)
             single_predictions.append(result)
         full_dataset = Batch(self.instances)
-        batch_tensors = full_dataset.as_tensor_dict(full_dataset.get_padding_lengths(), for_training=False)
+        batch_tensors = full_dataset.as_tensor_dict(full_dataset.get_padding_lengths())
         batch_predictions = self.model(**batch_tensors)
         for i, instance_predictions in enumerate(single_predictions):
             for key, single_predicted in instance_predictions.items():
@@ -163,7 +183,7 @@ class ModelTestCase(AllenNlpTestCase):
                     continue
                 single_predicted = single_predicted[0]
                 batch_predicted = batch_predictions[key][i]
-                if isinstance(single_predicted, torch.autograd.Variable):
+                if isinstance(single_predicted, torch.Tensor):
                     if single_predicted.size() != batch_predicted.size():
                         slices = tuple(slice(0, size) for size in single_predicted.size())
                         batch_predicted = batch_predicted[slices]

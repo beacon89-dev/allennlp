@@ -1,6 +1,5 @@
+from overrides import overrides
 import torch
-
-from torch.autograd import Variable
 from torch.nn import Dropout, Linear
 
 from allennlp.nn.util import last_dim_softmax, weighted_sum
@@ -75,6 +74,11 @@ class MultiHeadSelfAttention(Seq2SeqEncoder):
     def get_output_dim(self):
         return self._output_dim
 
+    @overrides
+    def is_bidirectional(self):
+        return False
+
+    @overrides
     def forward(self,  # pylint: disable=arguments-differ
                 inputs: torch.Tensor,
                 mask: torch.LongTensor = None) -> torch.FloatTensor:
@@ -95,7 +99,7 @@ class MultiHeadSelfAttention(Seq2SeqEncoder):
 
         batch_size, timesteps, _ = inputs.size()
         if mask is None:
-            mask = Variable(inputs.data.new(batch_size, timesteps).fill_(1.0))
+            mask = inputs.new_ones(batch_size, timesteps)
 
         # Shape (batch_size, timesteps, 2 * attention_dim + values_dim)
         combined_projection = self._combined_projection(inputs)

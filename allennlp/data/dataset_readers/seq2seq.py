@@ -5,6 +5,8 @@ from overrides import overrides
 
 from allennlp.common import Params
 from allennlp.common.checks import ConfigurationError
+from allennlp.common.file_utils import cached_path
+from allennlp.common.util import START_SYMBOL, END_SYMBOL
 from allennlp.data.dataset_readers.dataset_reader import DatasetReader
 from allennlp.data.fields import TextField
 from allennlp.data.instance import Instance
@@ -13,8 +15,6 @@ from allennlp.data.token_indexers import TokenIndexer, SingleIdTokenIndexer
 
 logger = logging.getLogger(__name__)  # pylint: disable=invalid-name
 
-START_SYMBOL = "@@START@@"
-END_SYMBOL = "@@END@@"
 
 @DatasetReader.register("seq2seq")
 class Seq2SeqDatasetReader(DatasetReader):
@@ -63,7 +63,7 @@ class Seq2SeqDatasetReader(DatasetReader):
 
     @overrides
     def _read(self, file_path):
-        with open(file_path, "r") as data_file:
+        with open(cached_path(file_path), "r") as data_file:
             logger.info("Reading instances from lines in file at: %s", file_path)
             for line_num, line in enumerate(data_file):
                 line = line.strip("\n")
@@ -113,6 +113,9 @@ class Seq2SeqDatasetReader(DatasetReader):
             target_token_indexers = TokenIndexer.dict_from_params(target_indexers_type)
         lazy = params.pop('lazy', False)
         params.assert_empty(cls.__name__)
-        return Seq2SeqDatasetReader(source_tokenizer, target_tokenizer,
-                                    source_token_indexers, target_token_indexers,
-                                    source_add_start_token, lazy)
+        return Seq2SeqDatasetReader(source_tokenizer=source_tokenizer,
+                                    target_tokenizer=target_tokenizer,
+                                    source_token_indexers=source_token_indexers,
+                                    target_token_indexers=target_token_indexers,
+                                    source_add_start_token=source_add_start_token,
+                                    lazy=lazy)
