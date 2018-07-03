@@ -16,3 +16,6 @@ dist/
 # Not sure I should include this one
 package-lock.json
 .idea
+
+# Unnecessary comment to try to resolve detached HEAD issue
+
